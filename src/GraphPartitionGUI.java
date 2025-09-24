@@ -20,8 +20,7 @@ import java.util.stream.IntStream;
  *
  * The application presents a "before" and "after" view of the graph.
  *
- * @author [Your Name]
- * @version 1.1 - Refactored for CV
+
  */
 public class GraphPartitionGUI extends JFrame {
 
