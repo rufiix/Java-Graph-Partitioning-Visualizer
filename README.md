@@ -1,64 +1,140 @@
+````markdown
 # Java Graph Partitioning Visualizer
 
 ## Overview
 
-This project is a Java Swing application designed to visualize the process of graph partitioning. It implements the Kernighan-Lin algorithm, a heuristic approach for partitioning an undirected graph into a specified number of balanced subsets while minimizing the number of "cut" edges (edges connecting vertices in different subsets).
+This project is a **Java Swing desktop application** that visualizes the process of **graph partitioning** using the **Kernighan–Lin algorithm**.  
+The algorithm is a heuristic method for dividing an undirected graph into balanced subsets while minimizing the number of **cut edges** (edges connecting vertices in different subsets).
 
-The application provides a user-friendly graphical interface (GUI) to:
-* Load graph data from a text file.
-* Visualize the graph before and after the partitioning process.
-* Configure partitioning parameters, such as the number of desired parts and the balance tolerance (margin).
-* Save the results of the partition to a file.
+The application provides an **interactive graphical interface (GUI)** that allows you to:
+- Load a graph from file or generate a random graph.
+- Visualize the graph before and during the partitioning process.
+- Configure partitioning parameters (number of partitions, balance margin).
+- Step through the algorithm manually or watch an animated visualization.
+- Save the final partitioning results to a file.
 
 ---
 
 ## Features
 
-* **Graph Visualization**: Displays the graph in a clear, circular layout, showing the initial state and the final partitioned state side-by-side.
-* **Kernighan-Lin Algorithm**: Employs the Kernighan-Lin heuristic to iteratively optimize the graph partition and reduce cut edges.
-* **Interactive Controls**: An intuitive GUI allows users to load graph files, specify the number of partitions, define a size margin for balance, and trigger the partitioning process.
-* **File I/O**:
-    * Loads graph structures from a custom-formatted text file.
-    * Saves the partitioning results, including the number of parts, cut edges, and vertex assignments for each subset.
-* **Color-Coded Output**: Vertices in the "after" panel are color-coded based on their assigned partition, making the results easy to interpret visually.
+- **Graph Visualization**
+  - Circular layout for vertices.
+  - Side-by-side display of the initial and partitioned graphs.
+  - Highlighted cut edges (in red) for clarity.
+  - Swapped vertices emphasized during algorithm steps.
+
+- **Kernighan–Lin Algorithm**
+  - Iterative heuristic for reducing cut edges.
+  - Random initial partitioning into configurable subsets.
+  - Pass-by-pass refinement until no further improvements.
+
+- **Interactive Controls**
+  - Load graphs from files or generate random graphs.
+  - Adjust number of partitions and allowed margin.
+  - Step, Play/Pause, and Reset controls for visualization.
+  - Adjustable animation speed with a slider.
+
+- **File I/O**
+  - **Input**: Reads graphs from a text file in CSR format (Compressed Sparse Row).
+  - **Output**: Saves the number of parts, cut edges, and vertex assignments per partition.
+
+- **Color-Coded Partitions**
+  - Vertices are color-coded in the partitioned graph view.
+  - Easy identification of subsets after algorithm execution.
 
 ---
 
 ## How to Run
 
 ### Prerequisites
-* Java Development Kit (JDK) 8 or higher.
+- **Java Development Kit (JDK) 8 or higher** installed on your system.
 
 ### Compilation & Execution
 
-1.  **Navigate to the source directory**:
-    Open a terminal and change the directory to `src/`.
+1. **Navigate to the source directory**:
+   ```bash
+   cd path/to/your/project/src
+````
 
-    ```bash
-    cd path/to/your/project/src
-    ```
+2. **Compile the program**:
 
-2.  **Compile the Java code**:
-    Use `javac` to compile the source file.
+   ```bash
+   javac GraphPartitionGUI.java
+   ```
 
-    ```bash
-    javac GraphPartitionGUI.java
-    ```
+3. **Run the application**:
 
-3.  **Run the application**:
-    Use the `java` command to launch the GUI.
-
-    ```bash
-    java GraphPartitionGUI
-    ```
-
-### Usage Instructions
-
-1.  **Load Graph**: Click the "Load Graph" button to open a file chooser and select a valid input file.
-2.  **Set Parameters**:
-    * **Parts**: Enter the desired number of partitions in the "Parts" text field.
-    * **Margin (%)**: Specify the allowed size deviation for each partition. For example, a 10% margin on a graph of 100 vertices partitioned into 2 parts would allow each partition to have between 45 and 55 vertices.
-3.  **Partition**: Click "Partition Graph" to execute the algorithm. The right-hand panel will update to show the partitioned graph.
-4.  **Save Result**: Click "Save Result" to save the outcome to a text file.
+   ```bash
+   java GraphPartitionGUI
+   ```
 
 ---
+
+## Usage Instructions
+
+1. **Load Graph**
+
+   * Click **"Load File"** to select a graph file in CSR format.
+   * Or click **"Random Graph"** to generate one based on vertex count and edge density.
+
+2. **Set Parameters**
+
+   * **Parts**: Number of desired partitions (minimum 2).
+   * **Margin (%)**: Allowed deviation in partition sizes.
+
+3. **Start Algorithm**
+
+   * Click **"Start"** to run the algorithm.
+   * Use **"Step"** to move step-by-step or **"Play"** to animate automatically.
+   * Use **"Reset"** to restart from the initial partition.
+
+4. **Save Results**
+
+   * Click **"Save"** to write the final partitions and number of cut edges to a file.
+
+---
+
+## Graph File Format
+
+When loading a graph from file, the format is:
+
+```
+<numVertices>
+<adjacency array separated by ';'>
+<pointers array separated by ';'>
+```
+
+### Example
+
+```
+5
+1;2;0;2;0;1;3;4;2;3;2;4
+0;2;4;7;9;12
+```
+
+* `numVertices` → number of vertices in the graph
+* `adjacency` → concatenated adjacency lists of all vertices
+* `pointers` → indices showing where each vertex’s neighbor list starts in the adjacency array
+
+---
+
+## Algorithm Overview (Kernighan–Lin)
+
+1. Generate an initial **random partition** of the graph.
+2. Iteratively **choose pairs of vertices** from different partitions.
+3. Compute the **gain** in reducing cut edges for swapping.
+4. Perform the swap if beneficial.
+5. Repeat until no further improvements are found.
+6. Output the final partitioning with minimal cut edges.
+
+---
+
+## Technologies
+
+* **Java 8+**
+* **Swing (GUI)**
+* **Compressed Sparse Row (CSR)** graph representation
+
+
+```
+```
