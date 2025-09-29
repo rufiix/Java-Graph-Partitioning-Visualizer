@@ -1,6 +1,4 @@
-Jasne ✅ – poniżej masz poprawioną i pełną wersję README w **Markdown**, gotową do wklejenia na GitHub:
 
-````markdown
 # Graph Partitioning Visualizer – Kernighan–Lin Algorithm
 
 A desktop application written in **Java (Swing)** that visualizes the **Kernighan–Lin algorithm**,  
