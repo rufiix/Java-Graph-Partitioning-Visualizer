@@ -33,14 +33,7 @@ a heuristic method for partitioning graphs into balanced subsets while minimizin
 
 ---
 
-## 🖥️ Screenshots
 
-*(You can add screenshots here by saving PNGs of the running application and placing them in a `screenshots/` folder, e.g.)*
-
-![Initial Graph](screenshots/initial.png)  
-![Algorithm Progress](screenshots/progress.png)  
-
----
 
 ## ⚙️ Installation & Running
 
