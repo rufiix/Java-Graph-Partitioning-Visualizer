@@ -1,556 +1,768 @@
 import javax.swing.*;
 import javax.swing.border.TitledBorder;
 import java.awt.*;
+import java.awt.event.ActionListener;
 import java.io.*;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 /**
- * A graphical user interface for visualizing and performing graph partitioning.
- *
- * This application allows users to load a graph from a specified file format,
- * partition it into a given number of parts using a heuristic based on the
- * Kernighan-Lin algorithm, and visualize the result. The partitioning aims
- * to minimize the number of "cut edges" (edges between different partitions)
- * while respecting a balance margin for the size of the partitions.
- *
- * The application presents a "before" and "after" view of the graph.
- *
-
+ * Graph Partitioning Visualizer using Kernighan-Lin Algorithm
+ * Shows step-by-step visualization of the partitioning process
  */
 public class GraphPartitionGUI extends JFrame {
 
-    // --- Constants ---
-    private static final int NODE_DIAMETER = 20;
-    private static final int MAX_REFINEMENT_PASSES = 10; // Prevents infinite loops
+    private static final int NODE_SIZE = 20;
+    private static final int MAX_PASSES = 10;
 
-    // --- GUI Components ---
-    private final GraphPanel beforePanel;
-    private final GraphPanel afterPanel;
-    private final JButton partitionButton;
-    private final JButton saveButton;
-    private final JLabel cutEdgesLabel;
+    // GUI components
+    private GraphPanel beforePanel;
+    private GraphPanel afterPanel;
+    private JButton partitionButton;
+    private JButton saveButton;
+    private JButton stepButton;
+    private JButton playButton;
+    private JButton resetButton;
+    private JLabel cutEdgesLabel;
+    private JLabel stepLabel;
+    private JTextArea logArea;
+    private JSlider speedSlider;
 
-    // --- State Variables ---
+    // Data
     private Graph graph;
     private Partition[] partitions;
+    private List<AlgorithmStep> steps;
+    private int currentStep;
+    private javax.swing.Timer animationTimer;
+    private boolean isPlaying;
 
-    // =================================================================================
-    // Data Models (Static Nested Classes)
-    // =================================================================================
-
-    /**
-     * Represents a graph using the Compressed Sparse Row (CSR) format.
-     */
+    // Graph data structure
     static class Graph {
         int numVertices;
-        int[] vertexAdjacency; // Concatenated list of neighbors for all vertices
-        int[] adjacencyPointers; // Pointers to the start of each vertex's neighbors in the adjacency list
+        int[] adjacency;      // all neighbors concatenated
+        int[] pointers;       // start index for each vertex's neighbors
     }
 
-    /**
-     * Represents a single partition (subset) of the graph's vertices.
-     */
     static class Partition {
         int[] vertices;
     }
 
-    // =================================================================================
-    // GUI Panel for Drawing
-    // =================================================================================
+    // Single step in the algorithm
+    static class AlgorithmStep {
+        int[] partitionMap;
+        int cutEdges;
+        String description;
+        int vertex1;  // highlighted vertex
+        int vertex2;  // highlighted vertex
 
-    /**
-     * A custom JPanel for rendering the graph structure.
-     */
+        AlgorithmStep(int[] map, int cuts, String desc) {
+            this.partitionMap = map.clone();
+            this.cutEdges = cuts;
+            this.description = desc;
+            this.vertex1 = -1;
+            this.vertex2 = -1;
+        }
+
+        void highlight(int v1, int v2) {
+            this.vertex1 = v1;
+            this.vertex2 = v2;
+        }
+    }
+
+    // Panel for drawing the graph
     class GraphPanel extends JPanel {
-        private Graph displayedGraph;
-        private Partition[] displayedPartitions;
-        private final boolean isAfterPartitionView;
+        private Graph g;
+        private int[] currentMap;
+        private boolean showAfter;
+        private int highlight1 = -1;
+        private int highlight2 = -1;
 
-        public GraphPanel(boolean isAfterPartitionView) {
-            this.isAfterPartitionView = isAfterPartitionView;
-            this.setBorder(new TitledBorder(isAfterPartitionView ? "After Partitioning" : "Before Partitioning"));
+        GraphPanel(boolean after) {
+            this.showAfter = after;
+            setBorder(new TitledBorder(after ? "Algorithm Progress" : "Initial State"));
         }
 
-        public void setGraph(Graph graph) {
-            this.displayedGraph = graph;
-            this.displayedPartitions = null; // Reset partitions when a new graph is set
+        void setGraph(Graph graph) {
+            this.g = graph;
+            this.currentMap = null;
             repaint();
         }
 
-        public void setPartitions(Partition[] partitions) {
-            this.displayedPartitions = partitions;
+        void updateView(int[] map, int v1, int v2) {
+            this.currentMap = map;
+            this.highlight1 = v1;
+            this.highlight2 = v2;
             repaint();
         }
 
-        @Override
-        protected void paintComponent(Graphics g) {
-            super.paintComponent(g);
-            if (displayedGraph == null) return;
+        protected void paintComponent(Graphics graphics) {
+            super.paintComponent(graphics);
+            if (g == null) return;
 
-            Graphics2D g2d = (Graphics2D) g;
-            g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            Graphics2D g2 = (Graphics2D) graphics;
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 
-            int width = getWidth();
-            int height = getHeight();
-            int radius = (Math.min(width, height) / 2) - (NODE_DIAMETER * 2);
-            int centerX = width / 2;
-            int centerY = height / 2;
+            int w = getWidth();
+            int h = getHeight();
+            int radius = (Math.min(w, h) / 2) - NODE_SIZE * 2;
+            int cx = w / 2;
+            int cy = h / 2;
 
-            Point[] positions = new Point[displayedGraph.numVertices];
-            for (int i = 0; i < displayedGraph.numVertices; i++) {
-                double angle = 2 * Math.PI * i / displayedGraph.numVertices;
-                positions[i] = new Point(
-                    (int) (centerX + radius * Math.cos(angle)),
-                    (int) (centerY + radius * Math.sin(angle))
-                );
+            // Calculate positions
+            Point[] positions = new Point[g.numVertices];
+            for (int i = 0; i < g.numVertices; i++) {
+                double angle = 2 * Math.PI * i / g.numVertices;
+                int x = (int) (cx + radius * Math.cos(angle));
+                int y = (int) (cy + radius * Math.sin(angle));
+                positions[i] = new Point(x, y);
             }
 
-            // Map each vertex to its partition index for coloring
-            int[] vertexToPartMap = new int[displayedGraph.numVertices];
-            Arrays.fill(vertexToPartMap, -1);
-            if (isAfterPartitionView && displayedPartitions != null) {
-                for (int i = 0; i < displayedPartitions.length; i++) {
-                    for (int vertex : displayedPartitions[i].vertices) {
-                        vertexToPartMap[vertex] = i;
-                    }
-                }
-            }
-
-            drawEdges(g2d, positions, vertexToPartMap);
-            drawVertices(g2d, positions, vertexToPartMap);
-        }
-
-        private void drawEdges(Graphics2D g2d, Point[] positions, int[] vertexToPartMap) {
-            for (int u = 0; u < displayedGraph.numVertices; u++) {
-                for (int i = displayedGraph.adjacencyPointers[u]; i < displayedGraph.adjacencyPointers[u + 1]; i++) {
-                    int v = displayedGraph.vertexAdjacency[i];
-                    if (u < v) { // Draw each edge only once
-                        // Highlight cut edges in the "after" panel
-                        if (isAfterPartitionView && displayedPartitions != null && vertexToPartMap[u] != vertexToPartMap[v]) {
-                            g2d.setColor(Color.RED);
-                            g2d.setStroke(new BasicStroke(2.0f));
-                        } else {
-                            g2d.setColor(Color.DARK_GRAY);
-                            g2d.setStroke(new BasicStroke(1.0f));
+            // Draw edges
+            for (int u = 0; u < g.numVertices; u++) {
+                for (int i = g.pointers[u]; i < g.pointers[u + 1]; i++) {
+                    int v = g.adjacency[i];
+                    if (u < v) {
+                        boolean isCut = false;
+                        if (showAfter && currentMap != null) {
+                            isCut = (currentMap[u] != currentMap[v]);
                         }
-                        g2d.drawLine(positions[u].x, positions[u].y, positions[v].x, positions[v].y);
+
+                        if (isCut) {
+                            g2.setColor(Color.RED);
+                            g2.setStroke(new BasicStroke(2.5f));
+                        } else {
+                            g2.setColor(Color.GRAY);
+                            g2.setStroke(new BasicStroke(1.0f));
+                        }
+                        g2.drawLine(positions[u].x, positions[u].y, positions[v].x, positions[v].y);
                     }
                 }
             }
-            g2d.setStroke(new BasicStroke(1.0f)); // Reset stroke
-        }
 
-        private void drawVertices(Graphics2D g2d, Point[] positions, int[] vertexToPartMap) {
-            Color[] colors = {Color.ORANGE, Color.BLUE, Color.GREEN, Color.MAGENTA, Color.CYAN, Color.PINK, Color.YELLOW};
-            for (int v = 0; v < displayedGraph.numVertices; v++) {
-                int x = positions[v].x - NODE_DIAMETER / 2;
-                int y = positions[v].y - NODE_DIAMETER / 2;
+            // Draw vertices
+            Color[] colors = {Color.ORANGE, Color.BLUE, Color.GREEN, Color.MAGENTA,
+                    Color.CYAN, Color.PINK, Color.YELLOW};
 
-                if (isAfterPartitionView && vertexToPartMap[v] != -1) {
-                    g2d.setColor(colors[vertexToPartMap[v] % colors.length]);
-                } else {
-                    g2d.setColor(Color.GRAY);
+            for (int v = 0; v < g.numVertices; v++) {
+                int x = positions[v].x - NODE_SIZE / 2;
+                int y = positions[v].y - NODE_SIZE / 2;
+
+                // Highlight swapped vertices
+                if (showAfter && (v == highlight1 || v == highlight2)) {
+                    g2.setColor(Color.YELLOW);
+                    g2.setStroke(new BasicStroke(3.0f));
+                    g2.drawOval(x - 3, y - 3, NODE_SIZE + 6, NODE_SIZE + 6);
+                    g2.setStroke(new BasicStroke(1.0f));
                 }
-                g2d.fillOval(x, y, NODE_DIAMETER, NODE_DIAMETER);
 
-                g2d.setColor(Color.BLACK);
-                g2d.drawOval(x, y, NODE_DIAMETER, NODE_DIAMETER);
+                // Color by partition
+                if (showAfter && currentMap != null) {
+                    g2.setColor(colors[currentMap[v] % colors.length]);
+                } else {
+                    g2.setColor(Color.LIGHT_GRAY);
+                }
+                g2.fillOval(x, y, NODE_SIZE, NODE_SIZE);
+                g2.setColor(Color.BLACK);
+                g2.drawOval(x, y, NODE_SIZE, NODE_SIZE);
 
-                g2d.setColor(Color.BLACK);
+                // Draw label
                 String label = String.valueOf(v);
-                FontMetrics fm = g2d.getFontMetrics();
-                int labelWidth = fm.stringWidth(label);
-                g2d.drawString(label, x + (NODE_DIAMETER - labelWidth) / 2, y + fm.getAscent() + (NODE_DIAMETER - fm.getHeight()) / 2);
+                FontMetrics fm = g2.getFontMetrics();
+                int labelW = fm.stringWidth(label);
+                int labelX = x + (NODE_SIZE - labelW) / 2;
+                int labelY = y + (NODE_SIZE + fm.getAscent()) / 2 - 2;
+                g2.drawString(label, labelX, labelY);
             }
         }
     }
 
-    // =================================================================================
-    // Main Application Constructor
-    // =================================================================================
-
+    // Constructor
     public GraphPartitionGUI() {
-        setTitle("Graph Partitioning Tool");
+        setTitle("Graph Partitioning - Kernighan-Lin Visualizer");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(1200, 700);
+        setSize(1400, 800);
         setLocationRelativeTo(null);
-        setLayout(new BorderLayout(10, 10));
 
-        // --- Control Panel ---
-        JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 10));
-        JTextField partsField = new JTextField("2", 4);
-        JTextField marginField = new JTextField("10.0", 5);
-        JButton loadButton = new JButton("Load Graph");
-        partitionButton = new JButton("Partition Graph");
-        saveButton = new JButton("Save Result");
-        cutEdgesLabel = new JLabel("Cut Edges: -");
+        // Control panel
+        JPanel controls = new JPanel(new FlowLayout());
+        JTextField partsField = new JTextField("2", 3);
+        JTextField marginField = new JTextField("10.0", 4);
+        JButton loadBtn = new JButton("Load File");
+        JButton randomBtn = new JButton("Random Graph");
+        partitionButton = new JButton("Start");
+        saveButton = new JButton("Save");
+        stepButton = new JButton("Step");
+        playButton = new JButton("Play");
+        resetButton = new JButton("Reset");
+        cutEdgesLabel = new JLabel("Cuts: -");
+        stepLabel = new JLabel("Step: -");
+        speedSlider = new JSlider(100, 2000, 500);
+        speedSlider.setPreferredSize(new Dimension(100, 25));
 
-        controlPanel.add(new JLabel("Parts:"));
-        controlPanel.add(partsField);
-        controlPanel.add(new JLabel("Balance Margin (%):"));
-        controlPanel.add(marginField);
-        controlPanel.add(loadButton);
-        controlPanel.add(partitionButton);
-        controlPanel.add(saveButton);
-        controlPanel.add(new JSeparator(SwingConstants.VERTICAL));
-        controlPanel.add(cutEdgesLabel);
+        controls.add(new JLabel("Parts:"));
+        controls.add(partsField);
+        controls.add(new JLabel("Margin(%):"));
+        controls.add(marginField);
+        controls.add(loadBtn);
+        controls.add(randomBtn);
+        controls.add(partitionButton);
+        controls.add(new JSeparator(SwingConstants.VERTICAL));
+        controls.add(resetButton);
+        controls.add(stepButton);
+        controls.add(playButton);
+        controls.add(new JLabel("Speed:"));
+        controls.add(speedSlider);
+        controls.add(new JSeparator(SwingConstants.VERTICAL));
+        controls.add(stepLabel);
+        controls.add(cutEdgesLabel);
+        controls.add(saveButton);
 
-        // --- Visualization Panels ---
+        // Graph panels
         beforePanel = new GraphPanel(false);
         afterPanel = new GraphPanel(true);
-        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, beforePanel, afterPanel);
-        splitPane.setResizeWeight(0.5); // Distribute space evenly
-        splitPane.setDividerLocation(0.5);
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, beforePanel, afterPanel);
+        split.setResizeWeight(0.5);
 
-        add(controlPanel, BorderLayout.NORTH);
-        add(splitPane, BorderLayout.CENTER);
+        // Log area
+        logArea = new JTextArea(8, 50);
+        logArea.setEditable(false);
+        logArea.setFont(new Font("Monospaced", Font.PLAIN, 11));
+        JScrollPane scroll = new JScrollPane(logArea);
+        scroll.setBorder(new TitledBorder("Algorithm Log"));
 
-        // --- Initial GUI State ---
+        JPanel center = new JPanel(new BorderLayout());
+        center.add(split, BorderLayout.CENTER);
+        center.add(scroll, BorderLayout.SOUTH);
+
+        add(controls, BorderLayout.NORTH);
+        add(center, BorderLayout.CENTER);
+
+        // Initial state
         partitionButton.setEnabled(false);
         saveButton.setEnabled(false);
+        stepButton.setEnabled(false);
+        playButton.setEnabled(false);
+        resetButton.setEnabled(false);
 
-        // --- Button Actions ---
-        loadButton.addActionListener(e -> handleLoadGraph());
-        partitionButton.addActionListener(e -> handlePartitionGraph(partsField.getText(), marginField.getText()));
-        saveButton.addActionListener(e -> handleSaveResult());
+        // Actions
+        loadBtn.addActionListener(e -> loadGraph());
+        randomBtn.addActionListener(e -> generateRandomGraph());
+        partitionButton.addActionListener(e -> startAlgorithm(partsField.getText(), marginField.getText()));
+        stepButton.addActionListener(e -> nextStep());
+        playButton.addActionListener(e -> togglePlay());
+        resetButton.addActionListener(e -> resetView());
+        saveButton.addActionListener(e -> saveResult());
+
+        // Animation timer
+        animationTimer = new javax.swing.Timer(500, e -> {
+            if (currentStep < steps.size() - 1) {
+                nextStep();
+            } else {
+                stopPlay();
+            }
+        });
     }
 
-    // =================================================================================
-    // Event Handlers
-    // =================================================================================
-
-    private void handleLoadGraph() {
-        JFileChooser fileChooser = new JFileChooser(".");
-        if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+    // Load graph from file
+    private void loadGraph() {
+        JFileChooser fc = new JFileChooser(".");
+        if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             try {
-                this.graph = loadGraphFromFile(fileChooser.getSelectedFile().getPath());
-                beforePanel.setGraph(graph);
-                afterPanel.setGraph(graph); // Show graph structure on both sides
-                partitionButton.setEnabled(true);
-                saveButton.setEnabled(false);
-                cutEdgesLabel.setText("Cut Edges: -");
-                JOptionPane.showMessageDialog(this, "Graph loaded successfully!", "Success", JOptionPane.INFORMATION_MESSAGE);
-            } catch (IOException | IllegalArgumentException ex) {
-                JOptionPane.showMessageDialog(this, "Error loading graph: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+                graph = loadGraphFile(fc.getSelectedFile().getPath());
+                initializeGraphView();
+                JOptionPane.showMessageDialog(this,
+                        "Loaded graph with " + graph.numVertices + " vertices");
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Error: " + ex.getMessage(),
+                        "Error", JOptionPane.ERROR_MESSAGE);
             }
         }
     }
 
-    private void handlePartitionGraph(String partsText, String marginText) {
+    // Generate random graph
+    private void generateRandomGraph() {
+        JPanel panel = new JPanel(new GridLayout(3, 2, 5, 5));
+        JTextField verticesField = new JTextField("10", 5);
+        JTextField densityField = new JTextField("0.3", 5);
+
+        panel.add(new JLabel("Number of vertices:"));
+        panel.add(verticesField);
+        panel.add(new JLabel("Edge density (0-1):"));
+        panel.add(densityField);
+        panel.add(new JLabel("Higher = more edges"));
+        panel.add(new JLabel(""));
+
+        int result = JOptionPane.showConfirmDialog(this, panel,
+                "Generate Random Graph", JOptionPane.OK_CANCEL_OPTION);
+
+        if (result == JOptionPane.OK_OPTION) {
+            try {
+                int n = Integer.parseInt(verticesField.getText());
+                double density = Double.parseDouble(densityField.getText());
+
+                if (n < 3 || n > 100) {
+                    throw new Exception("Vertices must be between 3 and 100");
+                }
+                if (density < 0 || density > 1) {
+                    throw new Exception("Density must be between 0 and 1");
+                }
+
+                graph = createRandomGraph(n, density);
+                initializeGraphView();
+                JOptionPane.showMessageDialog(this,
+                        String.format("Generated random graph:\n%d vertices, %d edges",
+                                graph.numVertices, countTotalEdges(graph)));
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Error: " + ex.getMessage(),
+                        "Error", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    // Initialize graph view after loading/generating
+    private void initializeGraphView() {
+        beforePanel.setGraph(graph);
+        afterPanel.setGraph(graph);
+        partitionButton.setEnabled(true);
+        saveButton.setEnabled(false);
+        stepButton.setEnabled(false);
+        playButton.setEnabled(false);
+        resetButton.setEnabled(false);
+        cutEdgesLabel.setText("Cuts: -");
+        stepLabel.setText("Step: -");
+        logArea.setText("");
+        steps = null;
+    }
+
+    // Create a random graph with given parameters
+    private Graph createRandomGraph(int numVertices, double density) {
+        Graph g = new Graph();
+        g.numVertices = numVertices;
+
+        // Build adjacency list
+        List<List<Integer>> adjList = new ArrayList<>();
+        for (int i = 0; i < numVertices; i++) {
+            adjList.add(new ArrayList<>());
+        }
+
+        // Add random edges
+        java.util.Random rand = new java.util.Random();
+        for (int i = 0; i < numVertices; i++) {
+            for (int j = i + 1; j < numVertices; j++) {
+                if (rand.nextDouble() < density) {
+                    adjList.get(i).add(j);
+                    adjList.get(j).add(i);
+                }
+            }
+        }
+
+        // Ensure graph is connected
+        ensureConnected(adjList, numVertices);
+
+        // Convert to CSR format
+        int totalEdges = 0;
+        for (List<Integer> neighbors : adjList) {
+            totalEdges += neighbors.size();
+        }
+
+        g.adjacency = new int[totalEdges];
+        g.pointers = new int[numVertices + 1];
+
+        int idx = 0;
+        for (int i = 0; i < numVertices; i++) {
+            g.pointers[i] = idx;
+            Collections.sort(adjList.get(i));
+            for (int neighbor : adjList.get(i)) {
+                g.adjacency[idx++] = neighbor;
+            }
+        }
+        g.pointers[numVertices] = idx;
+
+        return g;
+    }
+
+    // Make sure graph is connected
+    private void ensureConnected(List<List<Integer>> adjList, int n) {
+        boolean[] visited = new boolean[n];
+        dfs(0, adjList, visited);
+
+        // Connect unvisited components
+        for (int i = 1; i < n; i++) {
+            if (!visited[i]) {
+                // Connect to previous vertex
+                adjList.get(i - 1).add(i);
+                adjList.get(i).add(i - 1);
+                dfs(i, adjList, visited);
+            }
+        }
+    }
+
+    // DFS for connectivity check
+    private void dfs(int v, List<List<Integer>> adjList, boolean[] visited) {
+        visited[v] = true;
+        for (int neighbor : adjList.get(v)) {
+            if (!visited[neighbor]) {
+                dfs(neighbor, adjList, visited);
+            }
+        }
+    }
+
+    // Count total edges in graph
+    private int countTotalEdges(Graph g) {
+        int count = 0;
+        for (int u = 0; u < g.numVertices; u++) {
+            for (int i = g.pointers[u]; i < g.pointers[u + 1]; i++) {
+                int v = g.adjacency[i];
+                if (u < v) count++;
+            }
+        }
+        return count;
+    }
+
+    private Graph loadGraphFile(String path) throws IOException {
+        BufferedReader br = new BufferedReader(new FileReader(path));
+        Graph g = new Graph();
+        g.numVertices = Integer.parseInt(br.readLine().trim());
+
+        String[] adjTokens = br.readLine().trim().split(";");
+        g.adjacency = new int[adjTokens.length];
+        for (int i = 0; i < adjTokens.length; i++) {
+            g.adjacency[i] = Integer.parseInt(adjTokens[i]);
+        }
+
+        String[] ptrTokens = br.readLine().trim().split(";");
+        g.pointers = new int[ptrTokens.length];
+        for (int i = 0; i < ptrTokens.length; i++) {
+            g.pointers[i] = Integer.parseInt(ptrTokens[i]);
+        }
+
+        br.close();
+
+        if (g.pointers.length != g.numVertices + 1) {
+            throw new IOException("Invalid pointer count");
+        }
+        return g;
+    }
+
+    // Start the algorithm
+    private void startAlgorithm(String partsStr, String marginStr) {
         try {
-            int numParts = Integer.parseInt(partsText);
-            float margin = Float.parseFloat(marginText);
+            int numParts = Integer.parseInt(partsStr);
+            float margin = Float.parseFloat(marginStr);
 
             if (numParts < 2 || numParts > graph.numVertices) {
-                throw new NumberFormatException("Number of parts must be between 2 and the number of vertices.");
-            }
-            if (margin < 0) {
-                throw new NumberFormatException("Margin cannot be negative.");
+                throw new Exception("Parts must be 2-" + graph.numVertices);
             }
 
-            this.partitions = partitionGraph(graph, numParts, margin);
-            afterPanel.setPartitions(this.partitions);
-            
-            int cutEdges = calculateCutEdges(graph, partitions);
-            cutEdgesLabel.setText(String.format("Cut Edges: %d", cutEdges));
+            logArea.setText("Starting Kernighan-Lin...\n");
+            steps = runAlgorithm(graph, numParts, margin);
+            currentStep = 0;
 
+            stepButton.setEnabled(true);
+            playButton.setEnabled(true);
+            resetButton.setEnabled(true);
             saveButton.setEnabled(true);
-            JOptionPane.showMessageDialog(this, "Graph partitioned successfully.", "Success", JOptionPane.INFORMATION_MESSAGE);
 
-        } catch (NumberFormatException ex) {
-            JOptionPane.showMessageDialog(this, "Invalid input: " + ex.getMessage(), "Input Error", JOptionPane.ERROR_MESSAGE);
-        } catch (RuntimeException ex) {
-            JOptionPane.showMessageDialog(this, "Partitioning failed: " + ex.getMessage(), "Partitioning Error", JOptionPane.ERROR_MESSAGE);
+            displayStep();
+            logArea.append("Generated " + steps.size() + " steps\n");
+
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
         }
     }
 
-    private void handleSaveResult() {
-        JFileChooser fileChooser = new JFileChooser(".");
-        if (fileChooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-            try {
-                saveResultToFile(fileChooser.getSelectedFile().getPath(), partitions);
-                JOptionPane.showMessageDialog(this, "Result saved successfully!", "Success", JOptionPane.INFORMATION_MESSAGE);
-            } catch (IOException ex) {
-                JOptionPane.showMessageDialog(this, "Error saving result: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
-            }
-        }
-    }
+    // Run KL algorithm with step recording
+    private List<AlgorithmStep> runAlgorithm(Graph g, int numParts, float margin) {
+        List<AlgorithmStep> stepList = new ArrayList<>();
 
-    // =================================================================================
-    // File I/O Methods
-    // =================================================================================
+        // Initial partition
+        int[] map = randomPartition(g.numVertices, numParts);
+        int cuts = countCuts(g, map);
+        stepList.add(new AlgorithmStep(map, cuts, "Initial random partition"));
 
-    /**
-     * Loads a graph from a text file.
-     * Expected format:
-     * Line 1: Number of vertices (N)
-     * Line 2: Semicolon-separated list of neighbors for all vertices (adjacency list).
-     * Line 3: Semicolon-separated list of N+1 pointers into the adjacency list.
-     */
-    private Graph loadGraphFromFile(String filename) throws IOException, IllegalArgumentException {
-        try (BufferedReader reader = new BufferedReader(new FileReader(filename))) {
-            Graph newGraph = new Graph();
-            newGraph.numVertices = Integer.parseInt(reader.readLine().trim());
+        // KL refinement
+        boolean improved = true;
+        int pass = 0;
 
-            String[] adjTokens = reader.readLine().trim().split(";");
-            newGraph.vertexAdjacency = Arrays.stream(adjTokens).mapToInt(Integer::parseInt).toArray();
+        while (improved && pass < MAX_PASSES) {
+            improved = false;
+            pass++;
+            stepList.add(new AlgorithmStep(map, cuts, "\n=== Pass " + pass + " ==="));
 
-            String[] ptrTokens = reader.readLine().trim().split(";");
-            newGraph.adjacencyPointers = Arrays.stream(ptrTokens).mapToInt(Integer::parseInt).toArray();
-
-            if (newGraph.adjacencyPointers.length != newGraph.numVertices + 1) {
-                throw new IllegalArgumentException("Invalid number of row pointers.");
-            }
-            return newGraph;
-        }
-    }
-    
-    /**
-     * Saves the partitioning result to a text file.
-     */
-    private void saveResultToFile(String filename, Partition[] resultPartitions) throws IOException {
-        try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
-            writer.println(resultPartitions.length); // Number of parts
-            writer.println(calculateCutEdges(graph, resultPartitions)); // Number of cut edges
-            for (Partition part : resultPartitions) {
-                writer.print(part.vertices.length);
-                for (int vertex : part.vertices) {
-                    writer.print(" " + vertex);
-                }
-                writer.println();
-            }
-        }
-    }
-
-    // =================================================================================
-    // Core Partitioning Logic
-    // =================================================================================
-
-    /**
-     * Partitions the graph into a specified number of parts.
-     *
-     * @param graphToPartition The graph to partition.
-     * @param numParts The target number of partitions.
-     * @param margin The allowed percentage deviation from the ideal partition size.
-     * @return An array of Partition objects.
-     */
-    private Partition[] partitionGraph(Graph graphToPartition, int numParts, float margin) {
-        // 1. Create a random initial partition.
-        int[] vertexToPartMap = createRandomInitialPartition(graphToPartition.numVertices, numParts);
-
-        // 2. Iteratively refine the partition by applying Kernighan-Lin to pairs.
-        boolean improvementMade = true;
-        int passes = 0;
-        while (improvementMade && passes < MAX_REFINEMENT_PASSES) {
-            improvementMade = false;
             for (int i = 0; i < numParts; i++) {
                 for (int j = i + 1; j < numParts; j++) {
-                    if (refinePartitionPair(graphToPartition, vertexToPartMap, i, j)) {
-                        improvementMade = true;
+                    int[] newMap = refinePair(g, map, i, j, stepList, pass);
+                    if (newMap != null) {
+                        improved = true;
+                        map = newMap;
+                        cuts = countCuts(g, map);
                     }
                 }
             }
-            passes++;
+
+            if (!improved) {
+                stepList.add(new AlgorithmStep(map, cuts, "No improvement in pass " + pass));
+            }
         }
 
-        // 3. Verify balance constraints.
-        checkBalance(graphToPartition.numVertices, numParts, margin, vertexToPartMap);
-
-        // 4. Convert the final map into Partition objects.
-        return createPartitionsFromMap(vertexToPartMap, numParts);
-    }
-    
-    /**
-     * Creates an initial random assignment of vertices to partitions.
-     */
-    private int[] createRandomInitialPartition(int numVertices, int numParts) {
-        int[] mapping = new int[numVertices];
-        List<Integer> vertexIndices = IntStream.range(0, numVertices).boxed().collect(Collectors.toList());
-        Collections.shuffle(vertexIndices);
-
-        int currentPart = 0;
-        for (Integer vertexIndex : vertexIndices) {
-            mapping[vertexIndex] = currentPart;
-            currentPart = (currentPart + 1) % numParts;
-        }
-        return mapping;
+        stepList.add(new AlgorithmStep(map, cuts, "\n=== Final: " + cuts + " cut edges ==="));
+        return stepList;
     }
 
-    /**
-     * Applies a simplified, greedy Kernighan-Lin heuristic to a pair of partitions
-     * to reduce the number of cut edges between them.
-     *
-     * @return true if any vertices were swapped, false otherwise.
-     */
-    private boolean refinePartitionPair(Graph graphToRefine, int[] vertexToPartMap, int partIdx1, int partIdx2) {
-        boolean overallImprovement = false;
-        
-        List<Integer> part1Vertices = new ArrayList<>();
-        List<Integer> part2Vertices = new ArrayList<>();
-        for(int v=0; v < graphToRefine.numVertices; ++v) {
-            if(vertexToPartMap[v] == partIdx1) part1Vertices.add(v);
-            if(vertexToPartMap[v] == partIdx2) part2Vertices.add(v);
+    // Refine a pair of partitions
+    private int[] refinePair(Graph g, int[] map, int p1, int p2,
+                             List<AlgorithmStep> stepList, int pass) {
+        int[] working = map.clone();
+        List<SwapInfo> swaps = new ArrayList<>();
+
+        List<Integer> verts1 = new ArrayList<>();
+        List<Integer> verts2 = new ArrayList<>();
+        for (int v = 0; v < g.numVertices; v++) {
+            if (map[v] == p1) verts1.add(v);
+            if (map[v] == p2) verts2.add(v);
         }
-        
-        boolean[] locked = new boolean[graphToRefine.numVertices];
-        int iterations = Math.min(part1Vertices.size(), part2Vertices.size());
 
-        for (int iter = 0; iter < iterations; iter++) {
-            // Calculate D values (gains) for all unlocked vertices in the two partitions.
-            int[] gains = new int[graphToRefine.numVertices];
-            computeGains(graphToRefine, vertexToPartMap, partIdx1, partIdx2, gains, locked);
-            
-            // Find the best pair of vertices to swap.
-            int bestV1 = -1, bestV2 = -1;
-            int maxGain = Integer.MIN_VALUE;
+        boolean[] locked = new boolean[g.numVertices];
+        int iters = Math.min(verts1.size(), verts2.size());
 
-            for (int v1 : part1Vertices) {
+        // Generate all swaps
+        for (int iter = 0; iter < iters; iter++) {
+            int[] gains = computeGains(g, working, p1, p2, locked);
+
+            int bestV1 = -1, bestV2 = -1, maxGain = Integer.MIN_VALUE;
+
+            for (int v1 : verts1) {
                 if (locked[v1]) continue;
-                for (int v2 : part2Vertices) {
+                for (int v2 : verts2) {
                     if (locked[v2]) continue;
-                    
-                    int edgeCost = isConnected(graphToRefine, v1, v2) ? 2 : 0;
-                    int currentGain = gains[v1] + gains[v2] - edgeCost;
 
-                    if (currentGain > maxGain) {
-                        maxGain = currentGain;
+                    int cost = hasEdge(g, v1, v2) ? 2 : 0;
+                    int gain = gains[v1] + gains[v2] - cost;
+
+                    if (gain > maxGain) {
+                        maxGain = gain;
                         bestV1 = v1;
                         bestV2 = v2;
                     }
                 }
             }
 
-            if (maxGain > 0) {
-                // Perform the swap and lock the vertices.
-                vertexToPartMap[bestV1] = partIdx2;
-                vertexToPartMap[bestV2] = partIdx1;
+            if (bestV1 != -1) {
+                working[bestV1] = p2;
+                working[bestV2] = p1;
                 locked[bestV1] = true;
                 locked[bestV2] = true;
-                overallImprovement = true;
+
+                int cuts = countCuts(g, working);
+                swaps.add(new SwapInfo(working.clone(), bestV1, bestV2, maxGain, cuts, iter));
             } else {
-                // No positive gain swap found, stop refining this pair.
                 break;
             }
         }
-        return overallImprovement;
+
+        // Find best prefix (classic KL)
+        int bestIdx = -1;
+        int bestCuts = countCuts(g, map);
+
+        for (int i = 0; i < swaps.size(); i++) {
+            if (swaps.get(i).cuts < bestCuts) {
+                bestCuts = swaps.get(i).cuts;
+                bestIdx = i;
+            }
+        }
+
+        // Record steps
+        if (bestIdx >= 0) {
+            for (int i = 0; i <= bestIdx; i++) {
+                SwapInfo s = swaps.get(i);
+                AlgorithmStep step = new AlgorithmStep(s.map, s.cuts,
+                        String.format("Pass %d, pair(%d,%d), iter %d: swap %d<->%d gain=%d cuts=%d",
+                                pass, p1, p2, s.iter, s.v1, s.v2, s.gain, s.cuts));
+                step.highlight(s.v1, s.v2);
+                stepList.add(step);
+            }
+            return swaps.get(bestIdx).map;
+        }
+
+        return null;
     }
 
-    /**
-     * Computes the gain (D-value) for each vertex in the specified partitions.
-     * Gain = (Number of external edges) - (Number of internal edges).
-     */
-    private void computeGains(Graph graph, int[] vertexToPartMap, int partIdx1, int partIdx2, int[] gains, boolean[] locked) {
-        for (int v = 0; v < graph.numVertices; v++) {
-            if (locked[v] || (vertexToPartMap[v] != partIdx1 && vertexToPartMap[v] != partIdx2)) {
+    static class SwapInfo {
+        int[] map;
+        int v1, v2, gain, cuts, iter;
+
+        SwapInfo(int[] m, int v1, int v2, int g, int c, int i) {
+            this.map = m;
+            this.v1 = v1;
+            this.v2 = v2;
+            this.gain = g;
+            this.cuts = c;
+            this.iter = i;
+        }
+    }
+
+    // Compute gain for each vertex
+    private int[] computeGains(Graph g, int[] map, int p1, int p2, boolean[] locked) {
+        int[] gains = new int[g.numVertices];
+
+        for (int v = 0; v < g.numVertices; v++) {
+            if (locked[v] || (map[v] != p1 && map[v] != p2)) {
                 continue;
             }
 
-            int internalCost = 0;
-            int externalCost = 0;
-            for (int i = graph.adjacencyPointers[v]; i < graph.adjacencyPointers[v + 1]; i++) {
-                int neighbor = graph.vertexAdjacency[i];
-                if (vertexToPartMap[v] == vertexToPartMap[neighbor]) {
-                    internalCost++;
+            int internal = 0, external = 0;
+            for (int i = g.pointers[v]; i < g.pointers[v + 1]; i++) {
+                int neighbor = g.adjacency[i];
+                if (map[v] == map[neighbor]) {
+                    internal++;
                 } else {
-                    externalCost++;
+                    external++;
                 }
             }
-            gains[v] = externalCost - internalCost;
+            gains[v] = external - internal;
         }
+        return gains;
     }
 
-    /**
-     * Checks if the final partition respects the balance margin.
-     * Throws a RuntimeException if the constraint is violated.
-     */
-    private void checkBalance(int numVertices, int numParts, float margin, int[] vertexToPartMap) {
-        int[] partSizes = new int[numParts];
-        for (int partIndex : vertexToPartMap) {
-            partSizes[partIndex]++;
-        }
+    // Helper methods
+    private int[] randomPartition(int n, int parts) {
+        int[] map = new int[n];
+        List<Integer> indices = new ArrayList<>();
+        for (int i = 0; i < n; i++) indices.add(i);
+        Collections.shuffle(indices);
 
-        double idealSize = (double) numVertices / numParts;
-        int maxSize = (int) Math.ceil(idealSize * (1.0 + margin / 100.0));
-
-        for (int size : partSizes) {
-            if (size > maxSize) {
-                throw new RuntimeException(String.format("Balance constraint failed. Part size %d exceeds max allowed size %d.", size, maxSize));
-            }
+        for (int i = 0; i < n; i++) {
+            map[indices.get(i)] = i % parts;
         }
+        return map;
     }
-    
-    // =================================================================================
-    // Utility Methods
-    // =================================================================================
 
-    /**
-     * Calculates the total number of cut edges in a partitioned graph.
-     */
-    private int calculateCutEdges(Graph graph, Partition[] resultPartitions) {
-        if (resultPartitions == null) return 0;
-        int[] vertexToPartMap = new int[graph.numVertices];
-        for (int i = 0; i < resultPartitions.length; i++) {
-            for (int vertex : resultPartitions[i].vertices) {
-                vertexToPartMap[vertex] = i;
-            }
-        }
-
-        int cutEdges = 0;
-        for (int u = 0; u < graph.numVertices; u++) {
-            for (int i = graph.adjacencyPointers[u]; i < graph.adjacencyPointers[u + 1]; i++) {
-                int v = graph.vertexAdjacency[i];
-                if (u < v && vertexToPartMap[u] != vertexToPartMap[v]) {
-                    cutEdges++;
+    private int countCuts(Graph g, int[] map) {
+        int cuts = 0;
+        for (int u = 0; u < g.numVertices; u++) {
+            for (int i = g.pointers[u]; i < g.pointers[u + 1]; i++) {
+                int v = g.adjacency[i];
+                if (u < v && map[u] != map[v]) {
+                    cuts++;
                 }
             }
         }
-        return cutEdges;
+        return cuts;
     }
 
-    /**
-     * Checks if two vertices are connected by an edge.
-     */
-    private boolean isConnected(Graph graph, int u, int v) {
-        for (int i = graph.adjacencyPointers[u]; i < graph.adjacencyPointers[u + 1]; i++) {
-            if (graph.vertexAdjacency[i] == v) {
-                return true;
-            }
+    private boolean hasEdge(Graph g, int u, int v) {
+        for (int i = g.pointers[u]; i < g.pointers[u + 1]; i++) {
+            if (g.adjacency[i] == v) return true;
         }
         return false;
     }
-    
-    /**
-     * Converts the vertex-to-partition map into an array of Partition objects.
-     */
-    private Partition[] createPartitionsFromMap(int[] vertexToPartMap, int numParts) {
-        List<List<Integer>> tempPartitions = new ArrayList<>();
-        for (int i = 0; i < numParts; i++) {
-            tempPartitions.add(new ArrayList<>());
-        }
 
-        for (int v = 0; v < vertexToPartMap.length; v++) {
-            tempPartitions.get(vertexToPartMap[v]).add(v);
-        }
-
-        Partition[] finalPartitions = new Partition[numParts];
-        for (int i = 0; i < numParts; i++) {
-            finalPartitions[i] = new Partition();
-            finalPartitions[i].vertices = tempPartitions.get(i).stream().mapToInt(Integer::intValue).toArray();
-        }
-        return finalPartitions;
+    // UI control methods
+    private void nextStep() {
+        if (steps == null || currentStep >= steps.size() - 1) return;
+        currentStep++;
+        displayStep();
     }
 
-    // =================================================================================
-    // Application Entry Point
-    // =================================================================================
+    private void displayStep() {
+        if (steps == null || currentStep >= steps.size()) return;
+
+        AlgorithmStep step = steps.get(currentStep);
+        afterPanel.updateView(step.partitionMap, step.vertex1, step.vertex2);
+        cutEdgesLabel.setText("Cuts: " + step.cutEdges);
+        stepLabel.setText("Step: " + (currentStep + 1) + "/" + steps.size());
+        logArea.append(step.description + "\n");
+        logArea.setCaretPosition(logArea.getDocument().getLength());
+
+        // Update partitions for saving
+        if (currentStep == steps.size() - 1) {
+            partitions = makePartitions(step.partitionMap);
+        }
+    }
+
+    private void togglePlay() {
+        if (isPlaying) {
+            stopPlay();
+        } else {
+            isPlaying = true;
+            playButton.setText("Pause");
+            stepButton.setEnabled(false);
+            animationTimer.setDelay(speedSlider.getValue());
+            animationTimer.start();
+        }
+    }
+
+    private void stopPlay() {
+        isPlaying = false;
+        playButton.setText("Play");
+        stepButton.setEnabled(true);
+        animationTimer.stop();
+    }
+
+    private void resetView() {
+        if (steps == null) return;
+        stopPlay();
+        currentStep = 0;
+        displayStep();
+        logArea.append("\n--- Reset ---\n");
+    }
+
+    private Partition[] makePartitions(int[] map) {
+        int numParts = 0;
+        for (int p : map) {
+            if (p + 1 > numParts) numParts = p + 1;
+        }
+
+        List<List<Integer>> temp = new ArrayList<>();
+        for (int i = 0; i < numParts; i++) {
+            temp.add(new ArrayList<>());
+        }
+
+        for (int v = 0; v < map.length; v++) {
+            temp.get(map[v]).add(v);
+        }
+
+        Partition[] result = new Partition[numParts];
+        for (int i = 0; i < numParts; i++) {
+            result[i] = new Partition();
+            List<Integer> list = temp.get(i);
+            result[i].vertices = new int[list.size()];
+            for (int j = 0; j < list.size(); j++) {
+                result[i].vertices[j] = list.get(j);
+            }
+        }
+        return result;
+    }
+
+    private void saveResult() {
+        if (partitions == null) return;
+
+        JFileChooser fc = new JFileChooser(".");
+        if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            try {
+                PrintWriter pw = new PrintWriter(new FileWriter(fc.getSelectedFile()));
+                pw.println(partitions.length);
+                pw.println(steps.get(steps.size() - 1).cutEdges);
+
+                for (Partition p : partitions) {
+                    pw.print(p.vertices.length);
+                    for (int v : p.vertices) {
+                        pw.print(" " + v);
+                    }
+                    pw.println();
+                }
+                pw.close();
+                JOptionPane.showMessageDialog(this, "Saved successfully!");
+            } catch (IOException ex) {
+                JOptionPane.showMessageDialog(this, "Error: " + ex.getMessage());
+            }
+        }
+    }
 
     public static void main(String[] args) {
-        // Ensure GUI is created on the Event Dispatch Thread
-        SwingUtilities.invokeLater(() -> new GraphPartitionGUI().setVisible(true));
+        SwingUtilities.invokeLater(() -> {
+            new GraphPartitionGUI().setVisible(true);
+        });
     }
 }
